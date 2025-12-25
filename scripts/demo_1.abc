@@ -1,0 +1,5 @@
+rl scripts/demo_1.blif;
+print_stats;
+&get -n;
+&put;
+print_stats;
