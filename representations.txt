@@ -1,0 +1,324 @@
+Difference (short)
+
+Netlist: explicit nets (named wires). Non-net objects (PI/PO/node/latch) connect only to nets. A net has ≤1 driver but can have many loads. It’s “raw / 1:1 with input file”.
+
+Logic network: same logical objects but nets removed. Nodes/terminals/latches connect directly to other objects via fanin pointers/edges. Also, internal node names are discarded (keeps PI/PO/latch names).
+
+1) Netlist representation (with explicit Nets)
+
+Key constraints from the text:
+
+Nets have names.
+
+PI/node/latch drives exactly one net.
+
+Non-constant node / PO / latch is driven by a net.
+
+Net can drive many things, but cannot be driven by more than one thing.
+
+No net-to-net connections; no object-to-object (non-net) connections.
+
+#include <string>
+#include <vector>
+#include <unordered_map>
+#include <stdexcept>
+
+enum class ObjType { PI, PO, NODE, LATCH, NET };
+
+// Forward decl
+struct Obj;
+
+struct Net {
+  std::string name;
+
+  // exactly 0 or 1 driver object in a valid netlist
+  Obj* driver = nullptr;
+
+  // loads: objects that read this net (POs, latches, nodes, etc.)
+  std::vector<Obj*> loads;
+};
+
+struct Obj {
+  ObjType type;
+  int id;
+
+  // For PI/NODE/LATCH: which net does it drive?
+  Net* fanout_net = nullptr;
+
+  // For PO/LATCH/NODE: which nets drive it?
+  // (text says non-constant node has 1+ fanins)
+  std::vector<Net*> fanin_nets;
+
+  // Local function payload (SOP/BDD/AIG/gate), omitted here:
+  void* pData = nullptr;
+};
+
+struct Netlist {
+  std::vector<Obj*> objs;       // all objects (PIs, POs, nodes, latches, nets-as-objs if you want)
+  std::vector<Net*> nets;       // explicit nets
+  std::unordered_map<std::string, Net*> net_by_name;
+
+  Net* findOrCreateNet(const std::string& n) {
+    auto it = net_by_name.find(n);
+    if (it != net_by_name.end()) return it->second;
+    Net* net = new Net{n};
+    nets.push_back(net);
+    net_by_name[n] = net;
+    return net;
+  }
+
+  // This mirrors the spirit of Abc_ObjAddFanin, but netlist-valid:
+  // connect (driver_obj) -> (net) and (net) -> (load_obj)
+  void connectDriver(Obj* driver, Net* net) {
+    if (net->driver && net->driver != driver)
+      throw std::runtime_error("Net already has a driver (violates netlist rule).");
+    net->driver = driver;
+    driver->fanout_net = net;
+  }
+
+  void connectLoad(Net* net, Obj* load) {
+    net->loads.push_back(load);
+    load->fanin_nets.push_back(net);
+  }
+};
+
+Tiny example (PI a,b -> node n1 -> PO y)
+Netlist nl;
+
+Obj* a = new Obj{ObjType::PI, 1};
+Obj* b = new Obj{ObjType::PI, 2};
+Obj* n1 = new Obj{ObjType::NODE, 3};
+Obj* y = new Obj{ObjType::PO, 4};
+
+Net* na = nl.findOrCreateNet("a");
+Net* nb = nl.findOrCreateNet("b");
+Net* ny = nl.findOrCreateNet("y");
+
+nl.connectDriver(a, na);
+nl.connectDriver(b, nb);
+
+// n1 reads a,b and drives y
+nl.connectLoad(na, n1);
+nl.connectLoad(nb, n1);
+nl.connectDriver(n1, ny);
+
+// PO reads y
+nl.connectLoad(ny, y);
+
+2) Logic network representation (no Nets, direct fanin pointers)
+
+Key points from the text:
+
+Nets are removed; nodes point directly to nodes/terminals.
+
+PI has fanouts, no fanins. PO has exactly one fanin, no fanouts.
+
+Terminals stored in arrays; internal node names not stored.
+
+#include <vector>
+#include <string>
+
+enum class LObjType { PI, PO, NODE, LATCH_IN, LATCH_OUT };
+
+struct LObj {
+  LObjType type;
+  int id;
+
+  // direct connectivity (no nets)
+  std::vector<LObj*> fanins;
+  std::vector<LObj*> fanouts;
+
+  // only meaningful for PI/PO/latch endpoints per text
+  std::string name;
+
+  // node function payload (SOP/BDD/AIG/gate)
+  void* pData = nullptr;
+};
+
+struct LogicNetwork {
+  std::vector<LObj*> objs;
+  std::vector<LObj*> pis;
+  std::vector<LObj*> pos;
+  std::vector<LObj*> cis; // PIs + latch-outs
+  std::vector<LObj*> cos; // POs + latch-ins
+};
+
+static inline void addFanin(LObj* obj, LObj* fanin) {
+  obj->fanins.push_back(fanin);
+  fanin->fanouts.push_back(obj);
+}
+
+Same tiny example, but now direct edges
+LogicNetwork ln;
+
+LObj* a = new LObj{LObjType::PI, 1, {}, {}, "a"};
+LObj* b = new LObj{LObjType::PI, 2, {}, {}, "b"};
+LObj* n1 = new LObj{LObjType::NODE, 3};      // name intentionally empty
+LObj* y = new LObj{LObjType::PO, 4, {}, {}, "y"};
+
+addFanin(n1, a);
+addFanin(n1, b);
+addFanin(y, n1);
+
+// store terminals in arrays like ABC does
+ln.pis = {a, b};
+ln.pos = {y};
+
+
+If you want, I can also show the AIG-style literal representation described right after this section (node = AND2, complemented edges, structural hashing), since that’s the next jump the manual makes.
+
+yes great now can you show me the AIG style literal representation and complemented edges, structural hashing), since that’s the next jump the manual makes.
+
+Yep — ABC’s AIG is basically AND nodes + “edge inversion bits”, and it stays structurally hashed so identical ANDs are shared.
+
+AIG “literal” (edge) representation (complemented edges)
+
+Instead of storing an explicit NOT node, ABC stores a complement bit on each edge. An “edge” is a literal:
+
+literal = (node_id, complement_bit)
+
+common packed form: lit = (node_id << 1) | compl
+
+even numbers = positive literal
+
+odd numbers = complemented literal
+
+negate is just lit ^ 1
+
+#include <cstdint>
+#include <vector>
+#include <unordered_map>
+
+// Packed literal: (id<<1) | compl
+struct Lit {
+  uint32_t x;
+
+  static Lit mk(uint32_t id, bool compl=false) { return Lit{ (id << 1) | (compl ? 1u : 0u) }; }
+  uint32_t id()   const { return x >> 1; }
+  bool     neg()  const { return (x & 1u) != 0; }
+  Lit      inv()  const { return Lit{ x ^ 1u }; }  // complemented edge
+};
+
+// Node is always 2-input AND (except constants / PIs / COs in full ABC)
+struct AndNode {
+  Lit a, b;  // fanins (each has optional complement bit)
+};
+
+// Helpers: normalize commutative AND so (a,b) and (b,a) hash the same
+static inline void sort2(Lit& p, Lit& q) { if (p.x > q.x) std::swap(p,q); }
+
+Example: build f = ~(a & ~b)
+
+If a is node 1, b is node 2:
+
+~b is Lit::mk(2).inv()
+
+AND node fanins are (a, ~b)
+
+output literal is the AND node’s id, then .inv()
+
+Lit a = Lit::mk(1,false);
+Lit b = Lit::mk(2,false);
+
+Lit not_b = b.inv();              // complemented edge
+// g = a & ~b
+// f = ~g  (also just a complemented edge!)
+
+
+That’s exactly what the manual means by “each fanin/fanout edge has an optional complemented attribute indicating the inverter on that edge.”
+
+Structural hashing (one-level) — “don’t create duplicate ANDs”
+
+ABC enforces: for each ordered pair of fanins (including complement bits), there’s at most one AND node with those fanins.
+
+So when you “create AND(a,b)”, you:
+
+normalize fanins (commutativity)
+
+look up (a,b) in a hash table
+
+reuse existing node if found, else create new
+
+Here’s a minimal structural-hashing AIG manager:
+
+struct PairHash {
+  size_t operator()(const std::pair<uint32_t,uint32_t>& p) const noexcept {
+    // simple hash combine
+    return (size_t)p.first * 1315423911u + (size_t)p.second * 2654435761u;
+  }
+};
+
+struct AigMan {
+  // node 0 reserved as CONST1 in ABC’s AIG (manual says const1 has number 0)
+  // We'll follow that: Lit::mk(0,false) == 1, Lit::mk(0,true) == 0
+  std::vector<AndNode> ands; // AND nodes only; IDs will index into a separate id space in real ABC
+  std::unordered_map<std::pair<uint32_t,uint32_t>, uint32_t, PairHash> strash;
+
+  AigMan() {
+    // ID 0 is constant-1 (special, not in ands)
+  }
+
+  static Lit const1() { return Lit::mk(0,false); }
+  static Lit const0() { return Lit::mk(0,true); } // complement of const1
+
+  // create/reuse AND node; returns literal of its output
+  Lit And(Lit a, Lit b) {
+    // constant propagation (one of the invariants manual lists) :contentReference[oaicite:3]{index=3}
+    if (a.x == const0().x || b.x == const0().x) return const0();
+    if (a.x == const1().x) return b;
+    if (b.x == const1().x) return a;
+    if (a.x == b.x) return a;             // x & x = x
+    if (a.x == b.inv().x) return const0(); // x & ~x = 0
+
+    // normalize commutative inputs so hash is canonical
+    sort2(a, b);
+
+    auto key = std::make_pair(a.x, b.x);
+    auto it = strash.find(key);
+    if (it != strash.end()) {
+      uint32_t existing_id = it->second;
+      return Lit::mk(existing_id, false);
+    }
+
+    // create new AND node
+    uint32_t new_id = nextNodeId();
+    ands.push_back(AndNode{a,b});
+    strash[key] = new_id;
+    return Lit::mk(new_id, false);
+  }
+
+  // In real ABC, node IDs include PIs/POs/latches in one object array.
+  // Here we just pretend AND IDs start at 1 (since 0 is const1).
+  uint32_t nextNodeId() const { return (uint32_t)ands.size() + 1; }
+};
+
+What this buys you (ties directly to the manual)
+
+Structural hashing implies:
+
+no duplicate ANDs with same children (because lookup/reuse)
+
+no explicit inverters/buffers (use complement bit; constant rules collapse buffers-ish)
+
+constants get propagated (as shown in And() simplifications)
+
+And the “trickiness” the manual mentions becomes obvious: you can’t “duplicate a node” if it would create the same (fanin0,fanin1) pair, because hashing forces sharing.
+
+One more tiny end-to-end example
+AigMan m;
+
+// pretend PIs are ids 1 and 2 (in real ABC, PIs are objects too)
+Lit a = Lit::mk(1,false);
+Lit b = Lit::mk(2,false);
+
+// g = a & ~b
+Lit g = m.And(a, b.inv());
+
+// f = ~(a & ~b)
+Lit f = g.inv();
+
+// If you ask for the same AND again, you get the same node id back:
+Lit g2 = m.And(a, b.inv()); // g2.id() == g.id()
+
+
+If you want, next we can map this to the exact ABC macros you’ll see in code (e.g., how literals are encoded, how Abc_AigAnd() canonicalizes fanins, and how the strash table key is built)
