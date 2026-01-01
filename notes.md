@@ -204,3 +204,181 @@ For an AND node with fanins u,v, merge cuts of u and v.
 Keep unions whose size ≤ K (K-feasible).
 
 Prune dominated cuts (supersets with no benefit) and keep only a small best set per node.
+
+### Structural Equivalence (Strash) VS Functional Equivalence (dch and fraiging (functional reduction of AIGs))
+
+**Setup:** same function, different structures
+
+We want to compute:
+
+F(a,b,c) = (a ∧ b) ∨ (a ∧ c)
+
+**Version A (shared logic)**
+
+```
+t1 = AND(a, b)
+t2 = AND(a, c)
+F = OR(t1, t2)
+```
+
+As an AIG (using De Morgan for OR):
+
+```
+t1 = AND(a, b)
+t2 = AND(a, c)
+t3 = AND(!t1, !t2)
+F = !t3
+```
+
+**Version B (factored differently)**
+
+Using distributivity: F = a ∧ (b ∨ c)
+
+```
+t4 = OR(b, c)
+F = AND(a, t4)
+```
+
+As an AIG:
+
+```
+t4 = AND(!b, !c)
+t5 = !t4 // b OR c
+F = AND(a, t5)
+```
+
+**Structural comparison**
+
+| Aspect                  | Version A                    | Version B               |
+| ----------------------- | ---------------------------- | ----------------------- |
+| Number of AND nodes     | 3                            | 2                       |
+| Shape                   | Two parallel ANDs feeding OR | One AND feeding another |
+| Fanin structure         | Different                    | Different               |
+| Node sharing            | Partial                      | Different               |
+| Structurally identical? | ❌                           | ❌                      |
+
+Even though both compute the same function, no internal nodes match structurally.
+
+➡️ Structural hashing (&st) cannot merge these.
+
+**Functional comparison (fraiging)**
+
+Fraiging asks: "Do these nodes produce the same truth table?"
+
+Let's check key nodes:
+
+**Root nodes:**
+
+```
+F_A(a,b,c) = (a & b) | (a & c)
+F_B(a,b,c) = a & (b | c)
+```
+
+**Truth table (partial):**
+
+| a   | b   | c   | F_A | F_B |
+| --- | --- | --- | --- | --- |
+| 0   | x   | x   | 0   | 0   |
+| 1   | 0   | 0   | 0   | 0   |
+| 1   | 1   | 0   | 1   | 1   |
+| 1   | 0   | 1   | 1   | 1   |
+| 1   | 1   | 1   | 1   | 1   |
+
+✔ Functionally identical
+
+Fraiging (&dch) will:
+
+- Prove equivalence via simulation + SAT
+- Merge the two roots
+- Redirect fanouts to a single representative
+
+**Even deeper: internal node equivalence**
+
+Consider:
+
+```
+t1 = AND(a, b)
+t6 = AND(b, a)
+```
+
+- Structurally different (fanin order)
+- Functionally identical
+
+➡️ &st ❌  
+➡️ &dch ✅
+
+**What happens in ABC**
+
+| Pass   | Effect                               |
+| ------ | ------------------------------------ |
+| &st    | Merges only identical AND(a,b) nodes |
+| &dch   | Merges all equivalent Boolean cones  |
+| Result | Smaller, more shared GIA             |
+
+After fraiging, ABC may restructure the network to reuse the cheapest form.
+
+**Key intuition (important)**
+
+- **Structural equality is syntactic**
+- **Functional equality is semantic**
+
+Fraiging lets ABC:
+
+- ignore how logic was written
+- keep only what logic means
+
+That's why it's powerful — and expensive.
+
+---
+
+**If you want next, I can show:**
+
+- how SAT is used in fraiging
+- how choice nodes store alternatives
+- or how this impacts node provenance (which you care about)
+
+## What are choice nodes (in ABC/GIA)?
+
+A choice node represents multiple functionally equivalent implementations of the same Boolean function. Instead of picking one structure early, ABC keeps alternatives so later passes can choose the best.
+
+**Example:** F(a,b,c) = (a ∧ b) ∨ (a ∧ c)
+
+Two equivalent implementations:
+
+- **Impl A (sum of products):** `t1=AND(a,b); t2=AND(a,c); F1=OR(t1,t2)`
+- **Impl B (factored):** `t3=OR(b,c); F2=AND(a,t3)`
+
+**What fraiging does:**
+
+Proves F1 ≡ F2, then creates:
+
+```
+F (representative)
+ ├─ choice: F1
+ └─ choice: F2
+```
+
+**Why choices matter:**
+
+- Smaller area → pick factored
+- Shallower depth → pick SOP
+- Better mapping → pick LUT-friendly
+
+Choices delay commitment.
+
+**When choice nodes exist:**
+
+| Phase                    | Choice nodes |
+| ------------------------ | ------------ |
+| After `&dch` (fraiging)  | ✅           |
+| During rewriting/mapping | ✅           |
+| Simple GIA               | ❌           |
+| After `&put` / final AIG | ❌           |
+
+**One-line intuition:** Choice nodes let ABC remember multiple "good ways" to compute the same logic and decide later which one wins.
+
+---
+
+**So is this what fraiging does?**
+
+Yes. Fraiging proves that different AIG subgraphs compute the same Boolean function, merges them, and (optionally) records the alternatives as choice nodes so later passes can pick the best implementation.
