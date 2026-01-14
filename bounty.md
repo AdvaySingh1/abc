@@ -71,3 +71,14 @@ to have const-0 initial values, equivalent to "undc; st; zero")
 -v : toggles additional verbose output [default = no]
 -h : print the command usage
 <file> : the file name
+
+
+
+Great now make me a Project_Plan.md file? In this plan, I want this information.
+
+I also want the other helpful things from notes.md (specifically I just want the location where each of these things are happening (with the cmdAdd), and then I want you to make a timline
+Also, I'm thinking about adding a mapping between the current Gia_Man_t Gia_Obj_t (within the Gia_man_t_) and and original node list (with the IDs and names) in the intitial Abc_frame_t. This way, whever I read in the file, I can have the original name and then I can call this & command to print out the Gia_Man_t_ node mappings back to the original nodes. I'm thinking about appending the Vec_Vec_t to the Gia_Man_t in order to keep track of this mapping. Only if the current Gia_Man_t is not closed, is this command valid to execute. What do you think about this? Can you add this to a summary for me?
+
+
+At the start of it, say modify this function:
+Abc_CommandPrintLevel

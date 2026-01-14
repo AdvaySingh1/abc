@@ -1,0 +1,62 @@
+&get -n
+print_level
+&st
+print_level
+&sweep
+print_level
+&dch
+print_level
+&nf
+print_level
+&st
+print_level
+&syn2
+print_level
+&if -g -K 6
+print_level
+&synch2
+print_level
+&nf
+print_level
+&st
+print_level
+&syn2
+print_level
+&if -g -K 6
+print_level
+&synch2
+print_level
+&nf
+print_level
+&st
+print_level
+&syn2
+print_level
+&if -g -K 6
+print_level
+&synch2
+print_level
+&nf
+print_level
+&st
+print_level
+&syn2
+print_level
+&if -g -K 6
+print_level
+&synch2
+print_level
+&nf
+print_level
+&st
+print_level
+&syn2
+print_level
+&if -g -K 6
+print_level
+&synch2
+print_level
+&nf -v
+print_level
+&put
+print_level
